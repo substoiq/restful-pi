@@ -270,8 +270,8 @@ Compared with the original project:
 
 **Simpler to work with**
 
-- One pin list in `pins.py` instead of a copy in four files.
+- One pin list in `pins.py` instead of a copy in three files.
 - The light patterns are written once in `patterns.py` and shared by both scripts. `auto_timed.py`, `lightshow_put.py` and `collab.py` are merged in: every pattern now has `run_time`, and `lightshow.py` has `--method put` and `--url`.
 - Both scripts have a command line, and switch all LEDs off when you stop them.
-- `lightshow.py` reuses one HTTP connection, which makes fast patterns noticeably smoother, and has a timeout.
+- `lightshow.py` reuses one HTTP connection instead of opening a new one per request, and has a timeout.
 - Tests that run without a Raspberry Pi.
