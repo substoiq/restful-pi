@@ -1,106 +1,93 @@
-import RPi.GPIO as GPIO
-import random
-import time
+"""Control the LEDs directly through the GPIO pins, without the API.
 
-pins = [{'pin_num': 23, 'color': 'red'},
-        {'pin_num': 24, 'color': 'yellow'},
-        {'pin_num': 25, 'color': 'blue'},
-        {'pin_num': 22, 'color': 'red'},
-        {'pin_num': 12, 'color': 'yellow'},
-        {'pin_num': 16, 'color': 'blue'},
-        {'pin_num': 20, 'color': 'red'},
-        {'pin_num': 21, 'color': 'green'},
-        {'pin_num': 13, 'color': 'yellow'}]
+From the command line:
 
-GPIO.setmode(GPIO.BCM)  # use GPIO numbering, not generic
-GPIO.setwarnings(False)
+    python3 pin_controller.py wave --period 0.1
+    python3 pin_controller.py rainbow --run-time 20
 
-# setup all pins based on above configuration
-for pin in pins:
-    GPIO.setup(pin['pin_num'], GPIO.OUT, initial=GPIO.LOW)
+Or from a Python shell:
 
+    >>> import pin_controller
+    >>> pin_controller.color_on("red")
+    >>> pin_controller.wave(period=0.05, run_time=10)
 
-def toggle_color(color: str, state: str):
-    for pin in pins:
-        if pin['color'] == color:
-            if state == 'on':
-                GPIO.output(pin['pin_num'], GPIO.HIGH)
-            elif state == 'off':
-                GPIO.output(pin['pin_num'], GPIO.LOW)
+Don't run this while app.py is running: both want the same GPIO pins.
+"""
+
+import atexit
+import functools
+
+import patterns
+from leds import LedBoard
+from pins import DEFAULT_PINS
 
 
-def color_on(color: str):
-    toggle_color(color, 'on')
+class GpioLeds:
+    """The "leds" object for patterns.py, talking to the GPIO pins directly."""
+
+    def __init__(self, board: LedBoard, pins=DEFAULT_PINS):
+        self._board = board
+        self._pins = [dict(pin) for pin in pins]
+        for pin in self._pins:
+            board.add(pin["pin_num"])
+
+    def pins(self):
+        return [{**pin, "state": "on" if self._board.is_on(pin["pin_num"]) else "off"}
+                for pin in self._pins]
+
+    def set(self, pin, state: str):
+        self._board.set(pin["pin_num"], state == "on")
 
 
-def color_off(color: str):
-    toggle_color(color, 'off')
+_instance = None
 
 
-def all_on():
-    for pin in pins:
-        GPIO.output(pin['pin_num'], GPIO.HIGH)
+def _leds() -> GpioLeds:
+    """Claim the GPIO pins on first use, and release them when Python exits."""
+    global _instance
+    if _instance is None:
+        board = LedBoard()
+        atexit.register(board.close)
+        _instance = GpioLeds(board)
+    return _instance
 
 
-def all_off():
-    for pin in pins:
-        GPIO.output(pin['pin_num'], GPIO.LOW)
+def _bind(function):
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        return function(_leds(), *args, **kwargs)
+    return wrapper
 
 
 def pin_on(pin_num: int):
-    GPIO.output(pin_num, GPIO.HIGH)
+    _leds().set({"pin_num": pin_num}, "on")
 
 
 def pin_off(pin_num: int):
-    GPIO.output(pin_num, GPIO.LOW)
+    _leds().set({"pin_num": pin_num}, "off")
 
 
-def strobe_reg(period=0.5):
-    while True:
-        all_on()
-        time.sleep(period)
-        all_off()
-        time.sleep(period)
+switch_all = _bind(patterns.switch_all)
+all_on = _bind(patterns.all_on)
+all_off = _bind(patterns.all_off)
+toggle_color = _bind(patterns.toggle_color)
+color_on = _bind(patterns.color_on)
+color_off = _bind(patterns.color_off)
+
+on_off = _bind(patterns.on_off)
+strobe_rand = _bind(patterns.strobe_rand)
+wave = _bind(patterns.wave)
+wave_rand = _bind(patterns.wave_rand)
+wave_rand_ex = _bind(patterns.wave_rand_ex)
+rainbow = _bind(patterns.rainbow)
+single_rand = _bind(patterns.single_rand)
+random_stuff = _bind(patterns.random_stuff)
+
+# The names used in earlier versions
+strobe_reg = on_off
+wave_reg = wave
 
 
-def strobe_rand(min_time=0, max_time=1.2):
-    while True:
-        all_on()
-        time.sleep(random.uniform(min_time, max_time))
-        all_off()
-        time.sleep(random.uniform(min_time, max_time))
-
-
-def wave_reg(period=0.1):
-    while True:
-        for pin in pins:
-            GPIO.output(pin['pin_num'], GPIO.HIGH)
-            time.sleep(period)
-
-        for pin in reversed(pins):
-            GPIO.output(pin['pin_num'], GPIO.LOW)
-            time.sleep(period)
-
-
-def wave_rand(min_time=0, max_time=0.4):
-    while True:
-        period = random.uniform(min_time, max_time)
-        for pin in pins:
-            GPIO.output(pin['pin_num'], GPIO.HIGH)
-            time.sleep(period)
-
-        period = random.uniform(min_time, max_time)
-        for pin in reversed(pins):
-            GPIO.output(pin['pin_num'], GPIO.LOW)
-            time.sleep(period)
-
-
-def wave_rand_ex(min_time=0, max_time=0.4):
-    while True:
-        for pin in pins:
-            GPIO.output(pin['pin_num'], GPIO.HIGH)
-            time.sleep(random.uniform(min_time, max_time))
-
-        for pin in reversed(pins):
-            GPIO.output(pin['pin_num'], GPIO.LOW)
-            time.sleep(random.uniform(min_time, max_time))
+if __name__ == "__main__":
+    parser = patterns.make_parser("Run a light pattern directly on the GPIO pins.")
+    patterns.run_from_args(_leds(), parser.parse_args())

@@ -1,114 +1,100 @@
+"""Run a light show through the REST API, from any computer that can reach the Pi.
+
+From the command line:
+
+    python3 lightshow.py rainbow
+    python3 lightshow.py wave --period 0.05 --url http://raspberrypi.local:5000
+    python3 lightshow.py on_off --method put --run-time 30
+
+Or from a Python shell:
+
+    >>> import lightshow
+    >>> lightshow.color_on("red")
+    >>> lightshow.wave(period=0.05, run_time=10)
+
+The address of the API comes from --url, or from the environment variable
+RESTFUL_PI_URL, and is http://localhost:5000 by default.
+"""
+
+import functools
+import os
+
 import requests
-import random
-import time
 
-from urllib.parse import urljoin
+import patterns
 
-HOST = 'http://localhost:5000'
-PIN_ENDPOINT = 'pins/'
-PINS = urljoin(HOST, PIN_ENDPOINT)
+DEFAULT_URL = os.environ.get("RESTFUL_PI_URL", "http://localhost:5000")
+TIMEOUT = 5  # seconds
 
 
-def toggle_color(color: str, state: str):
-    for pin in requests.get(PINS).json():
-        if pin['color'] == color:
-            requests.patch(urljoin(PINS, str(pin)),
-                           json={"state": state})
+class ApiLeds:
+    """The "leds" object for patterns.py, talking to the REST API.
+
+    method="patch" sends only the new state; method="put" sends the whole pin,
+    to show the difference between the two HTTP methods.
+    """
+
+    def __init__(self, url: str = DEFAULT_URL, method: str = "patch"):
+        if method not in ("patch", "put"):
+            raise ValueError("method must be 'patch' or 'put'")
+        self._pins_url = url.rstrip("/") + "/pins/"
+        self._method = method
+        # One session reuses the same connection for every request, which is a lot faster.
+        self._session = requests.Session()
+
+    def pins(self):
+        response = self._session.get(self._pins_url, timeout=TIMEOUT)
+        response.raise_for_status()
+        return response.json()
+
+    def set(self, pin, state: str):
+        url = f"{self._pins_url}{pin['id']}"
+        if self._method == "patch":
+            response = self._session.patch(url, json={"state": state}, timeout=TIMEOUT)
+        else:
+            body = {"pin_num": pin["pin_num"], "color": pin["color"], "state": state}
+            response = self._session.put(url, json=body, timeout=TIMEOUT)
+        response.raise_for_status()
 
 
-def switch_all(state: str):
-    for pin in requests.get(PINS).json():
-        if pin['state'] != state:
-            requests.patch(urljoin(PINS, str(pin['id'])),
-                           json={"state": state})
+_instance = None
 
 
-def all_on():
-    switch_all("on")
+def _leds() -> ApiLeds:
+    global _instance
+    if _instance is None:
+        _instance = ApiLeds()
+    return _instance
 
 
-def all_off():
-    switch_all("off")
+def _bind(function):
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        return function(_leds(), *args, **kwargs)
+    return wrapper
 
 
-def color_on(color: str):
-    toggle_color(color, 'on')
+switch_all = _bind(patterns.switch_all)
+all_on = _bind(patterns.all_on)
+all_off = _bind(patterns.all_off)
+toggle_color = _bind(patterns.toggle_color)
+color_on = _bind(patterns.color_on)
+color_off = _bind(patterns.color_off)
+
+on_off = _bind(patterns.on_off)
+strobe_rand = _bind(patterns.strobe_rand)
+wave = _bind(patterns.wave)
+wave_rand = _bind(patterns.wave_rand)
+wave_rand_ex = _bind(patterns.wave_rand_ex)
+rainbow = _bind(patterns.rainbow)
+single_rand = _bind(patterns.single_rand)
+random_stuff = _bind(patterns.random_stuff)
 
 
-def color_off(color: str):
-    toggle_color(color, 'off')
-
-
-def random_stuff(max_period=0.5):
-    all_list = [all_on, all_off]
-    color_functs = [color_off, color_on]
-
-    colors = ['red', 'blue', 'green', 'yellow']
-
-    while True:
-        random.choice(all_list)()
-        time.sleep(random.uniform(0.1, max_period))
-        random.choice(color_functs)(random.choice(colors))
-        time.sleep(random.uniform(0.1, max_period))
-        random.choice(color_functs)(random.choice(colors))
-        time.sleep(random.uniform(0.1, max_period))
-
-
-def rainbow(period=0.5):
-    colors = ['red', 'blue', 'green', 'yellow']
-    while True:
-        for color in colors:
-            color_on(color)
-            time.sleep(period)
-            color_off(color)
-
-
-def on_off(period=0.5):
-    while True:
-        all_on()
-        time.sleep(period)
-        all_off()
-        time.sleep(period)
-
-
-def wave(period=0.1):
-    while True:
-        pins = requests.get(PINS).json()
-
-        for pin in pins:
-            requests.patch(urljoin(PINS, str(pin['id'])),
-                           json={"state": "on"})
-            time.sleep(period)
-
-        for pin in reversed(pins):
-            requests.patch(urljoin(PINS, str(pin['id'])),
-                           json={"state": "off"})
-            time.sleep(period)
-
-
-def wave_rand_ex(min_time=0, max_time=0.4):
-    while True:
-        for pin in requests.get(PINS).json():
-            requests.patch(urljoin(PINS, str(pin['id'])),
-                           json={"state": "on"})
-            time.sleep(random.uniform(min_time, max_time))
-
-        for pin in reversed(pins):
-            requests.patch(urljoin(PINS, str(pin['id'])),
-                           json={"state": "off"})
-            time.sleep(random.uniform(min_time, max_time))
-
-
-def single_rand(period=0.1):
-    while True:
-        pins = requests.get(PINS).json()
-        pin = random.choice(pins)
-        requests.patch(urljoin(PINS, str(pin['id'])),
-                       json={"state": "on"})
-        time.sleep(period)
-        requests.patch(urljoin(PINS, str(pin['id'])),
-                       json={"state": "off"})
-
-
-if __name__ == '__main__':
-    rainbow()
+if __name__ == "__main__":
+    parser = patterns.make_parser("Run a light pattern through the RESTful Pi API.")
+    parser.add_argument("--url", default=DEFAULT_URL, help=f"address of the API (default: {DEFAULT_URL})")
+    parser.add_argument("--method", choices=["patch", "put"], default="patch",
+                        help="HTTP method for switching a pin (default: patch)")
+    args = parser.parse_args()
+    patterns.run_from_args(ApiLeds(args.url, args.method), args)

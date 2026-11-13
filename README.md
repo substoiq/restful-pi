@@ -1,148 +1,277 @@
 # RESTful Pi
-This is a Flask app written in Python3. This app is a REST API backend to control the GPIO pins of a Raspberry Pi by making HTTP requests to the `/pins` and `/pins/<id>` endpoints. This project uses a breadboard outfitted with LEDs connected to the Raspberyy Pi's GPIO pins to demonstrate the correct function of the API calls. This app could easily be extended to trigger and process more complex events to control the pins of a Pi beyond lighting up a couple LEDs.
 
-A step-by-step tutorial I wrote to get started with this project can be found [here](https://avcourt.github.io/tiny-cluster/2019/09/18/pi_led.html).
+A small REST API that switches the GPIO pins of a Raspberry Pi. Every LED on a breadboard becomes a resource at `/pins/<id>`; a `PATCH` with `{"state": "on"}` lights it up. Two scripts turn that into a light show: one through the API, from any computer on your network, and one directly on the GPIO pins.
 
-A video series I published on YouTube going over this project can be found [here](https://www.youtube.com/playlist?list=PLLIDdNg0t5ceg3mI3vn0YJocJ4ndMtM98).
+Built with Python 3, [Flask](https://flask.palletsprojects.com/), [Flask-RESTX](https://flask-restx.readthedocs.io/) and [gpiozero](https://gpiozero.readthedocs.io/). Works on every Raspberry Pi model, including the Raspberry Pi 5.
 
-## HTTP Methods
-These requests use the standard HTTP requests `GET`, `POST`, `PUT`, and `DELETE`. We will also use `PATCH` for partial updates to enable us to just send a `state` update to an existing pin endpoint. This will make sending requests through the Python `requests` library a little more succint, as we'll mainly be interested in changing the state for making our light show.
+> This is a modernised fork of [avcourt/restful-pi](https://github.com/avcourt/restful-pi) by avcourt, who also wrote a [step-by-step tutorial](https://avcourt.github.io/tiny-cluster/2019/09/18/pi_led.html) and a [video series](https://www.youtube.com/playlist?list=PLLIDdNg0t5ceg3mI3vn0YJocJ4ndMtM98) about the original version. See [What changed](#what-changed) for the differences.
 
-The JSON model of the `pin` resource is:
-```json 
-    {
-        "id": "Integer(readonly=True, description='The pin unique identifier')",
-        "pin_num": "Integer(required=True, description='GPIO pin associated with this endpoint')",
-        "color": "String(required=True, description='LED color')",
-        "state": "String(required=True, description='LED on or off')"
-    }
-```
+## What you need
 
-The HTTP verbs correspond to the typical CRUD operations:
-- POST `pins/` : **Create** a new pin
-    - where the posted data is JSON looking something like the following:
-        ```json
-        {
-            "pin_num": 23,
-            "color": "red",
-            "state": "on"
-        }
-        ```
-     - STATUS Code 201 Created - the new resource is returned in the body of the message
-     
-- GET `pins/`: Fetech (**Read**) all pins stored on the system - STATUS 200 on success
-    - e.g:
-      ```json
-        {
-            "id": "1",
-            "pin_num": 23,
-            "color": "red",
-            "state": "on"
-        },
-        {
-            "id": "2",
-            "pin_num": 24,
-            "color": "blue",
-            "state": "off"
-        }
-        ```
- - GET `pins/<id>`: Fetch a pin given its resource identifier - STATUS 200 on success
-    ```json
-        {
-            "id": "2",
-            "pin_num": 24,
-            "color": "blue",
-            "state": "off"
-        }
-    ```
- - PUT `pins/<id>` : **Update** a pin given its resource id - STATUS 200 on success
-    - Generally in RESTful APIs a PUT should send an entire resource for updating.
-    
-    - Update all fields (except for its uid which is READONLY)
+- A Raspberry Pi with Raspberry Pi OS (Bookworm or newer)
+- 9 LEDs, preferably in several colors (3 red, 3 yellow, 2 blue and 1 green in this setup)
+- 9 resistors of 220 Ω to 1 kΩ, one per LED
+- A breadboard and 10 jumper wires
 
-     - e.g. Update all fields of pin with id 2:
-        - PUT `/pins/2` 
-            ```json
-            {
-                "pin_num": 24,
-                "color": "blue",
-                "state": "off"
-            }
-            ```
- - DELETE `pins/<id>` : **Delete** pin<id> from system - STATUS 204 : Ok, no content
-    
- - PATCH `pins/<id>` : **Partially Update** a pin given its resource id - STATUS 200 on success
-    - You can update a single field, or all fields (except for its uid which is READONLY)
-    - e.g. Update the state of pin with id 2:
-        - PUT `/pins/2` 
-            ```json
-            {"state": "off"}
-            ```
-    
-## Breadboard Setup
-For this project to work without modifying the code, you will need:
-- 9 x (preferably multicolored leds, 3xR,1xG,2xB,3xY in my case)
-- 9 x 1k resistors (anything over 100Ω should be fine)
-- 1 x breadboard
-- 10 x GPIO connecting cables
+### Wiring
 
-There are many kits available on Amazon for under $20.
-    
-### GPIO Pins
-This code uses the following configuration:
-```json
-{"pin_num": 23, "color": "red",}
-{"pin_num": 24, "color": "yellow"},
-{"pin_num": 25, "color": "blue"},
-{"pin_num": 22, "color": "red"},
-{"pin_num": 12, "color": "yellow"},
-{"pin_num": 16, "color": "blue"},
-{"pin_num": 20, "color": "red"},
-{"pin_num": 21, "color": "green"},
-{"pin_num": 13, "color": "yellow"}
-```
-*Note*: **These pin numbers refer to the GPIO pin numbers, not the generic numbering**
-![GPIO](img/rpi_gpio.jpg)
+Each LED goes from a GPIO pin, through a resistor, to ground. The code uses these pins:
 
-### Schematic
+| GPIO | Color | | GPIO | Color | | GPIO | Color |
+|---:|---|---|---:|---|---|---:|---|
+| 23 | red | | 22 | red | | 20 | red |
+| 24 | yellow | | 12 | yellow | | 21 | green |
+| 25 | blue | | 16 | blue | | 13 | yellow |
+
+These are **BCM GPIO numbers** (the "GPIO23" names), not the physical pin positions on the header. Using other pins or colors? Change the list in [`pins.py`](pins.py); the API and both scripts read it from there.
+
+![GPIO numbering](img/rpi_gpio.jpg)
+
 ![Schematic](img/schematic.png)
 
-## Running
-Once you have your board setup and connected to the Pi and have a connection to your Raspberry Pi, either remotely via SSH(check out my [tutorial](https://www.youtube.com/watch?v=Lr3LLpVBSUk) on SSH access) or locally through a desktop OS on your Raspberry Pi:
-- `git clone https://github.com/avcourt/restful-pi2/`
-- `cd restful-pi`
-- `sudo apt install python3-pip`
-- `pip3 install -r requirements.txt`
-- `python3 app.py`
+## Installation
 
-If you are running this locally on the pi with a desktop, point your browser at localhost:5000 and you will be greeted by a SwaggerUI to make HTTP requests.
+Raspberry Pi OS no longer lets `pip` install packages system-wide, so the app gets its own virtual environment. The `--system-site-packages` option lets it use the GPIO libraries that come with Raspberry Pi OS.
 
-If you're developing remotely through SSH access you will have to create a SSH tunnel from your local machine to the Raspberry Pi in order to access the SwaggerUI. Check out [this](video) video for how to do that.
+```bash
+git clone https://github.com/substoiq/restful-pi.git
+cd restful-pi
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-Once you're tired of manually sending HTTP requests through Swagger(curl), open a Python3 shell in this repo's root directory:
-- `python3`
-- `import pin_controller.py`
-- test out some of the functions:
-    - `toggle_color(color: str, state: str)`
-    - `switch_all(state: str)`
-    - `all_on()`
-    - `all_off()`
-    - `color_on(color: str)`
-    - `color_off(color: str)`
-    - `random_stuff()`
-    - `rainbow(period: float)`
-    - `on_off(period: float)`
-    - `wave(period: float)`
-    - `single_rand(period: float)`
+## Running the API
 
-e.g.:
-`pin_controller.color_on("red")`
+```bash
+python3 app.py
+```
 
-The functions that have the `period` float paramater have a default value for oscillation. Experiment with different values.
+Then open <http://localhost:5000/docs> on the Pi for the interactive Swagger UI, where you can try every request.
 
-Try making your own functions or messing around with the ones included in this repo.
+By default the API only listens on the Pi itself. To reach it from other computers on your network:
 
-## Cleanup
-`pip3 uninstall -r requirements.txt`
+```bash
+RESTFUL_PI_HOST=0.0.0.0 python3 app.py
+```
 
-If you have any questions you can join my Discord [server](https://discord.gg/5PfXqqr).
+and open `http://<address-of-your-pi>:5000/docs`.
+
+> The API has no authentication. Anyone who can reach port 5000 can switch your pins. Only open it up on a network you trust.
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `RESTFUL_PI_HOST` | `127.0.0.1` | Address the API listens on |
+| `RESTFUL_PI_PORT` | `5000` | Port the API listens on |
+
+All LEDs are switched off when the app stops.
+
+### Try it without a Raspberry Pi
+
+gpiozero can simulate the pins in memory. That lets you run the API, the scripts and the tests on any computer:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+GPIOZERO_PIN_FACTORY=mock python3 app.py
+```
+
+## The API
+
+A pin looks like this:
+
+```json
+{
+  "id": 1,
+  "pin_num": 23,
+  "color": "red",
+  "state": "off"
+}
+```
+
+| Field | Type | Rules |
+|---|---|---|
+| `id` | integer | Assigned by the API, read-only |
+| `pin_num` | integer | BCM GPIO number, 2 to 27, each pin only once |
+| `color` | string | Any non-empty text |
+| `state` | string | `"on"` or `"off"` |
+
+| Request | Does | Success |
+|---|---|---|
+| `GET /pins/` | List all pins | 200 |
+| `POST /pins/` | Add a pin; needs `pin_num`, `color` and `state` | 201 |
+| `GET /pins/<id>` | Fetch one pin | 200 |
+| `PUT /pins/<id>` | Replace a pin; needs `pin_num`, `color` and `state` | 200 |
+| `PATCH /pins/<id>` | Change one or more fields, for example only `state` | 200 |
+| `DELETE /pins/<id>` | Remove a pin and switch its LED off | 204 |
+
+Errors:
+
+| Status | When |
+|---|---|
+| 400 | Missing field, wrong type, `state` other than `on`/`off`, or `pin_num` outside 2–27 |
+| 404 | No pin with that id |
+| 409 | The GPIO pin is already used by another pin |
+
+### Examples with curl
+
+```bash
+# All pins
+curl http://localhost:5000/pins/
+
+# Switch pin 1 on
+curl -X PATCH http://localhost:5000/pins/1 \
+     -H "Content-Type: application/json" -d '{"state": "on"}'
+
+# Replace pin 2 completely
+curl -X PUT http://localhost:5000/pins/2 \
+     -H "Content-Type: application/json" \
+     -d '{"pin_num": 24, "color": "yellow", "state": "on"}'
+
+# Add an LED on GPIO 5
+curl -X POST http://localhost:5000/pins/ \
+     -H "Content-Type: application/json" \
+     -d '{"pin_num": 5, "color": "white", "state": "off"}'
+
+# Remove it again
+curl -X DELETE http://localhost:5000/pins/10
+```
+
+## Light shows
+
+There are two ways to run the same light patterns:
+
+| Script | Talks to | Use it |
+|---|---|---|
+| `lightshow.py` | The REST API | From any computer that can reach the Pi, while `app.py` runs |
+| `pin_controller.py` | The GPIO pins directly | On the Pi itself, while `app.py` is **not** running |
+
+Both take a pattern name and options:
+
+```bash
+python3 lightshow.py rainbow
+python3 lightshow.py wave --period 0.05 --url http://raspberrypi.local:5000
+python3 lightshow.py on_off --method put --run-time 30
+
+python3 pin_controller.py wave_rand --min-time 0 --max-time 0.2
+```
+
+| Pattern | What it does | Options |
+|---|---|---|
+| `on_off` | All LEDs on and off at a steady pace | `--period` |
+| `strobe_rand` | All LEDs on and off at a random pace | `--min-time`, `--max-time` |
+| `wave` | LEDs on one by one, then off in reverse | `--period` |
+| `wave_rand` | A wave with a random speed per direction | `--min-time`, `--max-time` |
+| `wave_rand_ex` | A wave with a random pause after every LED | `--min-time`, `--max-time` |
+| `rainbow` | One color at a time | `--period` |
+| `single_rand` | One random LED at a time | `--period` |
+| `random_stuff` | A random mix of everything | `--max-period` |
+
+Every pattern accepts `--run-time` to stop after a number of seconds; without it, it runs until you press Ctrl+C. Either way, all LEDs are switched off at the end.
+
+`lightshow.py` also takes:
+
+- `--url`: the address of the API. You can also set it once with the `RESTFUL_PI_URL` environment variable. Default: `http://localhost:5000`.
+- `--method`: `patch` (default) sends only `{"state": ...}`; `put` sends the whole pin. Handy to see the difference between the two HTTP methods.
+
+### From a Python shell
+
+```python
+>>> import lightshow
+>>> lightshow.color_on("red")
+>>> lightshow.all_off()
+>>> lightshow.wave(period=0.05, run_time=10)
+```
+
+`pin_controller` has the same functions, plus `pin_on(pin_num)` and `pin_off(pin_num)`.
+
+### Writing your own pattern
+
+Patterns live in [`patterns.py`](patterns.py). A pattern is a function that gets a `leds` object with two methods, `leds.pins()` and `leds.set(pin, state)`, so it works through the API and directly on the GPIO pins without changes:
+
+```python
+def blink_green(leds, period=0.3, run_time=None):
+    for _ in _running(run_time):
+        color_on(leds, "green")
+        time.sleep(period)
+        color_off(leds, "green")
+        time.sleep(period)
+```
+
+Add it to the `PATTERNS` dictionary at the bottom of the file and both scripts can run it.
+
+## Running the API as a service
+
+To start the API automatically when the Pi boots, create `/etc/systemd/system/restful-pi.service` (replace `<user>` with your user name):
+
+```ini
+[Unit]
+Description=RESTful Pi
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=<user>
+WorkingDirectory=/home/<user>/restful-pi
+Environment=RESTFUL_PI_HOST=0.0.0.0
+ExecStart=/home/<user>/restful-pi/.venv/bin/python app.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now restful-pi
+```
+
+## Project layout
+
+| File | Contents |
+|---|---|
+| `app.py` | The REST API |
+| `pins.py` | The LED layout: GPIO number and color per LED |
+| `leds.py` | Switches GPIO pins through gpiozero |
+| `patterns.py` | The light patterns and the shared command-line options |
+| `lightshow.py` | Runs patterns through the API |
+| `pin_controller.py` | Runs patterns directly on the GPIO pins |
+| `tests/` | Tests, run against simulated pins |
+
+## Tests
+
+The tests use gpiozero's simulated pins, so they run on any computer:
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m pytest
+```
+
+## What changed
+
+Compared with the original project:
+
+**It runs again on current hardware and software**
+
+- Flask-RESTPlus is no longer maintained and fails to import on Python 3.10 and newer. It is replaced by its maintained successor, Flask-RESTX, which keeps the same API and Swagger UI.
+- RPi.GPIO does not work on the Raspberry Pi 5. It is replaced by gpiozero, the library Raspberry Pi recommends, which works on every model.
+- Dependencies are no longer pinned to 2019 versions with known security issues.
+- The installation uses a virtual environment, because Raspberry Pi OS Bookworm no longer allows `pip install` system-wide.
+
+**Bugs fixed**
+
+- `toggle_color` in `lightshow.py` built its URL from the whole pin instead of its id, so `color_on` and `color_off` never reached the right pin. (The same bug was in `collab.py`.)
+- `wave_rand_ex` in `lightshow.py` crashed on an undefined variable.
+- A request could overwrite a pin's `id` by including it in the body.
+- `state` accepted any text; anything other than `on` or `off` was stored without switching the LED.
+- Moving a pin to another GPIO number left the old pin switched on.
+- Two pins could use the same GPIO number.
+- The API ran in Flask's debug mode, which is meant for development only. It also started the app twice, so the GPIO pins were set up twice.
+
+**Simpler to work with**
+
+- One pin list in `pins.py` instead of a copy in four files.
+- The light patterns are written once in `patterns.py` and shared by both scripts. `auto_timed.py`, `lightshow_put.py` and `collab.py` are merged in: every pattern now has `run_time`, and `lightshow.py` has `--method put` and `--url`.
+- Both scripts have a command line, and switch all LEDs off when you stop them.
+- `lightshow.py` reuses one HTTP connection, which makes fast patterns noticeably smoother, and has a timeout.
+- Tests that run without a Raspberry Pi.
